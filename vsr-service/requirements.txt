@@ -1,0 +1,12 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+httpx>=0.27.0
+oss2>=2.18.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# video-subtitle-remover 依赖（精简版，按需放开）
+# 完整依赖见 /Users/loganyan/github/video-subtitle-remover/requirements.txt
+# 在 vsr-service/ 启动前，请先把 video-subtitle-remover 加入 Python path
+# 安装：pip install -r /Users/loganyan/github/video-subtitle-remover/requirements.txt
+# 同时安装 paddlepaddle + torch（按硬件选 CUDA / CPU / DirectML，详见 VSR README）
