@@ -28,6 +28,10 @@ class SubtitleDetect:
 
     def _init_sample_step(self):
         """根据视频帧率自适应设置采样间隔，保持每秒至少采样8帧"""
+        custom_step = getattr(config, "subtitleDetectSampleStep", None)
+        if custom_step is not None and int(custom_step.value) > 0:
+            self.SAMPLE_STEP = int(custom_step.value)
+            return
         cap = cv2.VideoCapture(get_readable_path(self.video_path))
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
@@ -50,7 +54,7 @@ class SubtitleDetect:
             model_name=model_config.DET_MODEL_NAME,
             model_dir=model_config.DET_MODEL_DIR,
             device="cpu",
-            enable_hpi=len(onnx_providers) > 0,
+            enable_hpi=False,
         )
 
     def detect_subtitle(self, img):
@@ -113,15 +117,48 @@ class SubtitleDetect:
         subtitle_frame_no_box_dict = {}
         detected_nos = sorted(sampled_results.keys())
         max_gap = self.SAMPLE_STEP * 2
+        fill_cfg = getattr(config, "subtitleDetectFillMaxGapFrames", None)
+        if fill_cfg is not None and int(fill_cfg.value) > 0:
+            max_gap = max(max_gap, int(fill_cfg.value))
+        carry_fwd_cfg = getattr(config, "subtitleDetectCarryForwardFrames", None)
+        carry_bwd_cfg = getattr(config, "subtitleDetectCarryBackwardFrames", None)
+        carry_forward = int(carry_fwd_cfg.value) if carry_fwd_cfg is not None else 0
+        carry_backward = int(carry_bwd_cfg.value) if carry_bwd_cfg is not None else 0
         for f, next_f in zip(detected_nos, detected_nos[1:]):
             subtitle_frame_no_box_dict[f] = sampled_results[f]
             if next_f - f <= max_gap:
                 fill_mask = sampled_results[f]
+                next_mask = sampled_results.get(next_f)
+                if next_mask:
+                    merged = list(fill_mask)
+                    for area in next_mask:
+                        if area not in merged:
+                            merged.append(area)
+                    fill_mask = merged
                 for fill_f in range(f + 1, next_f):
+                    subtitle_frame_no_box_dict[fill_f] = fill_mask
+            elif carry_forward > 0:
+                fill_mask = sampled_results[f]
+                end_f = min(next_f - 1, f + carry_forward)
+                for fill_f in range(f + 1, end_f + 1):
+                    subtitle_frame_no_box_dict[fill_f] = fill_mask
+            if carry_backward > 0:
+                fill_mask = sampled_results[f]
+                start_f = max(1, f - carry_backward)
+                for fill_f in range(start_f, f):
                     subtitle_frame_no_box_dict[fill_f] = fill_mask
         # 添加最后一个检测帧
         if detected_nos:
             subtitle_frame_no_box_dict[detected_nos[-1]] = sampled_results[detected_nos[-1]]
+            if carry_forward > 0:
+                fill_mask = sampled_results[detected_nos[-1]]
+                for fill_f in range(detected_nos[-1] + 1, detected_nos[-1] + carry_forward + 1):
+                    subtitle_frame_no_box_dict[fill_f] = fill_mask
+            if carry_backward > 0:
+                fill_mask = sampled_results[detected_nos[-1]]
+                start_f = max(1, detected_nos[-1] - carry_backward)
+                for fill_f in range(start_f, detected_nos[-1]):
+                    subtitle_frame_no_box_dict[fill_f] = fill_mask
         subtitle_frame_no_box_dict = self.unify_regions(subtitle_frame_no_box_dict)
         if sub_remover:
             sub_remover.append_output(tr['Main']['FinishedFindingSubtitles'])

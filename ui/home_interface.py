@@ -188,6 +188,18 @@ class HomeInterface(QWidget):
         if get_current_task_index == -1:
             return
         self.task_list_component.update_task_option(get_current_task_index, TaskOptions.SUB_AREAS, selections)
+        # 日志: 框选区域宽高 (按预览窗口像素计算)
+        display_w = self.video_display.width()
+        display_h = self.video_display.height()
+        if not selections:
+            print(f"[VSR] 框选区域已清空 (预览窗口 {display_w}x{display_h})")
+            return
+        for idx, (ymin, ymax, xmin, xmax) in enumerate(selections):
+            box_w = round((xmax - xmin) * display_w)
+            box_h = round((ymax - ymin) * display_h)
+            print(f"[VSR] 框选 #{idx}: 预览像素 {box_w}x{box_h} "
+                  f"(y={round(ymin*display_h)}~{round(ymax*display_h)}, "
+                  f"x={round(xmin*display_w)}~{round(xmax*display_w)})")
 
     def on_task_selected(self, index, file_path):
         """处理任务被选中事件
@@ -594,6 +606,11 @@ class HomeInterface(QWidget):
         self.video_display_component.set_dragger_enabled(True)
         # 视频模式下恢复用户原始的 inpaint 模式选择
         self._unlock_inpaint_mode()
+       # 日志: 视频原始宽高 + 预览窗口宽高
+        preview_w = self.video_display_component.video_preview_width
+        preview_h = self.video_display_component.video_preview_height
+        print(f"[VSR] 视频已加载: 原始 {self.frame_width}x{self.frame_height}, "
+              f"预览窗口 {preview_w}x{preview_h}, FPS={self.fps}, 总帧数={self.frame_count}")
         return True
 
     def load_as_picture(self, path):

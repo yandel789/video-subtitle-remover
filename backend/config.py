@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem, 
@@ -53,6 +52,10 @@ class Config(QConfig):
     inpaintMode = OptionsConfigItem("Main", "InpaintMode", InpaintMode.STTN_AUTO, OptionsValidator(InpaintMode), EnumSerializer(InpaintMode))
     
     subtitleDetectMode =  OptionsConfigItem("Main", "SubtitleDetectMode", SubtitleDetectMode.PP_OCRv5_SERVER, OptionsValidator(SubtitleDetectMode), EnumSerializer(SubtitleDetectMode))
+    subtitleDetectSampleStep = RangeConfigItem("Main", "SubtitleDetectSampleStep", 1, RangeValidator(0, 10))
+    subtitleDetectFillMaxGapFrames = RangeConfigItem("Main", "SubtitleDetectFillMaxGapFrames", 32, RangeValidator(0, 300))
+    subtitleDetectCarryForwardFrames = RangeConfigItem("Main", "SubtitleDetectCarryForwardFrames", 200, RangeValidator(0, 300))
+    subtitleDetectCarryBackwardFrames = RangeConfigItem("Main", "SubtitleDetectCarryBackwardFrames", 200, RangeValidator(0, 300))
 
     # 【设置像素点偏差】
     # 用于判断是不是非字幕区域(一般认为字幕文本框的长度是要大于宽度的，如果字幕框的高大于宽，且大于的幅度超过指定像素点大小，则认为是错误检测)
