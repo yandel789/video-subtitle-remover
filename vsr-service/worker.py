@@ -217,13 +217,16 @@ def _run_vsr(task_id: str, input_path, output_path, coords: dict, inpaint_mode: 
     sr.sub_areas = [(coords["ymin"], coords["ymax"], coords["xmin"], coords["xmax"])]
     sr.video_out_path = str(output_path)
 
-    # 设置 inpaint 模式（修改 VSR 全局 config）
+    # 设置 inpaint 模式与字幕检测模式（修改 VSR 全局 config）
     try:
         from backend.config import config as vsr_config
-        from backend.tools.constant import InpaintMode
+        from backend.tools.constant import InpaintMode, SubtitleDetectMode
         vsr_config.inpaintMode.value = InpaintMode[inpaint_mode.replace("-", "_").upper()]
+        detect_mode_str = config.VSR_DEFAULT_SUBTITLE_DETECT_MODE
+        vsr_config.subtitleDetectMode.value = SubtitleDetectMode[detect_mode_str]
+        log.info(f"[{task_id}] VSR 模式: inpaint={inpaint_mode}, detect={detect_mode_str}")
     except Exception as e:
-        log.warning(f"设置 inpaint_mode 失败，使用 VSR 默认值: {e}")
+        log.warning(f"设置 inpaint_mode/subtitleDetectMode 失败，使用 VSR 默认值: {e}")
 
     # 进度回调
     def on_progress(percent, finished):
@@ -265,7 +268,9 @@ def _download_oss_with_retry(url: str, local_path, max_retries: int = None):
 def _download_file(url: str, local_path):
     """流式下载"""
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(300.0)) as r:
+    # trust_env=False：禁用系统/环境代理（Mac 上 httpx 默认会读系统代理，
+    # 导致 OSS 等公网 HTTPS 全部 ConnectError: Connection refused）
+    with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(300.0), trust_env=False) as r:
         r.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in r.iter_bytes(chunk_size=1024 * 256):
@@ -282,7 +287,9 @@ def _upload_oss_with_retry(local_path, oss_key: str, max_retries: int = None) ->
         raise FileNotFoundError(f"本地文件不存在: {local_path}")
 
     auth = oss2.Auth(config.OSS_ACCESS_KEY_ID, config.OSS_ACCESS_KEY_SECRET)
-    bucket = oss2.Bucket(auth, config.OSS_ENDPOINT, config.OSS_BUCKET)
+    # 禁用系统代理（Mac 上 oss2 默认会读系统代理 127.0.0.1:7897，导致 OSS 上传走代理失败）
+    # 注意：proxies={} 在 oss2 中不生效，必须显式传 'http':'' 'https':''
+    bucket = oss2.Bucket(auth, config.OSS_ENDPOINT, config.OSS_BUCKET, proxies={'http': '', 'https': ''})
 
     last_err = None
     for attempt in range(1, max_retries + 1):

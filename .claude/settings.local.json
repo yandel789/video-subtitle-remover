@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Read(//Users/loganyan/.claude/**)",
-      "Read(//Users/loganyan/**)"
+      "Read(//Users/loganyan/**)",
+      "Bash(ls -la .env*)",
+      "Bash(.venv/bin/python:*)"
     ]
   }
 }

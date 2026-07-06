@@ -70,6 +70,15 @@ ui/home_interface.py + ui/component/*                         ▼
 ### Entry points
 - **`gui.py`** — PySide6 + qfluentwidgets FluentWindow. Hosts `HomeInterface` (task list + video preview) and `AdvancedSettingInterface` (every tunable exposed in the UI). Forks the actual work into a subprocess via `SubtitleRemoverRemoteCall`; `ProcessManager` kills orphans.
 - **`backend/main.py`** — CLI entry. `SubtitleRemover` is the top-level orchestrator: opens video with cv2, writes a temp mp4 via `FFmpegVideoWriter` (libx264 over a pipe, not `cv2.VideoWriter`), then runs the selected mode.
+- **`vsr-service/`** — FastAPI HTTP wrapper (port 3001) consumed by the external `videoClean` project. Endpoints: `POST /vsr/remove` (enqueue), `GET /vsr/progress/{tid}` (poll), `GET /vsr/health` (readiness). A background worker thread (concurrency=1) downloads from OSS → calls `SubtitleRemover.run()` → uploads to OSS → cleans up. Startup script: `vsr-service/start.sh` (auto-creates `.venv/`, installs `requirements.txt`, asks whether to install VSR's PaddlePaddle + PyTorch). See `vsr-service/README.md` for the full OSS env vars and `videoClean/backend/.env` integration. This service does NOT modify `backend/` — `git pull` of the parent VSR repo upgrades both codebases.
+
+### CLI flags (`backend/tools/args_handler.py`)
+| Flag | Alias | Required | Notes |
+|------|-------|----------|-------|
+| `--input` | `-i` | yes | Input video or image path |
+| `--output` | `-o` | no | Defaults to `<input>_no_sub.mp4` next to the source |
+| `--subtitle-area-coords` | `-c` | no | `YMIN YMAX XMIN XMAX`, repeatable; omit → full-frame |
+| `--inpaint-mode` | | no | `sttn-auto` (default) \| `sttn-det` \| `lama` \| `propainter` \| `opencv` |
 
 ### Five inpaint modes (`backend/inpaint/`)
 | Mode | File | Backend | Notes |
@@ -80,13 +89,19 @@ ui/home_interface.py + ui/component/*                         ▼
 | `PROPAINTER` | `propainter_inpaint.py` | RAFT flow + transformer | Highest VRAM, best on motion-heavy video. Splits frame vertically into `split_h = W*3/16` strips via `get_inpaint_area_by_mask`. |
 | `OPENCV` | `opencv_inpaint.py` | cv2.inpaint | Trivial fallback. |
 
+### Inpaint sub-modules (`backend/inpaint/`)
+The five top-level files are thin orchestrators over the real model code:
+- `sttn/` — `auto_sttn.py` (STTNAutoInpaint's network), `network_sttn.py` (transformer + temporal layers, used by both auto and det modes).
+- `utils/` — `lama_util.py`, `sttn_utils.py` (mask helpers, neighbor-frame batching), `spectral_norm.py`, `utils.py`.
+- `video/` — vendored ProPainter tree: `model/` (transformer + flow completion), `core/` (inference loop), `raft/` (RAFT optical flow network).
+
 ### Detection pipeline (`backend/tools/subtitle_detect.py`)
 1. Sample frames at `SAMPLE_STEP` (auto: 2/3/4 based on FPS; or user override `subtitleDetectSampleStep`).
 2. PaddleOCR text detection → polygon → `(xmin, xmax, ymin, ymax)` boxes.
 3. Filter against user-supplied subtitle regions (single-region fast path in `detect_subtitle`).
 4. Interpolate: fill gaps ≤ `subtitleDetectFillMaxGapFrames`, carry forward/backward by `subtitleDetectCarry*Frames`.
 5. `unify_regions` to merge similar boxes across frames.
-6. `find_continuous_ranges_with_same_mask` → split by scene cuts (`backend/scenedetect` ContentDetector) → `filter_and_merge_intervals` ensures each run is ≥ `sttnReferenceLength`.
+6. `find_continuous_ranges_with_same_mask` → split by scene cuts (`backend/scenedetect` ContentDetector — a vendored copy of PySceneDetect) → `filter_and_merge_intervals` ensures each run is ≥ `sttnReferenceLength`.
 
 ### Hardware acceleration (`backend/tools/hardware_accelerator.py`)
 Singleton that probes, in order: torch-directml → CUDA → MPS → onnxruntime providers (Dml/ROCM/MIGraphX/VitisAI/OpenVINO/Metal/CoreML/CUDA). The `.device` property is lazy because onnxruntime-directml ≥ 1.21.1 conflicts with torch-directml — pinned to `onnxruntime-directml==1.20.1` for that reason (see comment in `hardware_accelerator.py:131`).

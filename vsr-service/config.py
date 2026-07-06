@@ -6,30 +6,31 @@ vsr-service 配置模块
 - 阿里云 OSS 凭据（VSR 处理完后上传结果用）
 - 重试策略
 
-本服务位于 video-subtitle-remover/vsr-service/ 目录。
-凭据默认从 videoClean 项目的 backend/.env 加载（通过 VIDEOCLEAN_BACKEND_DIR 配置）。
+本服务位于 video-subtitle-remover/vsr-service/ 目录，独立部署。
+凭据从本目录下的 .env 加载（见 .env.example）。
 """
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
 
-def _load_video_clean_env():
-    """加载 videoClean 后端的 .env 文件以获取 OSS 凭据。
+def _load_env():
+    """加载 OSS 等凭据环境变量。
 
-    路径解析顺序：
-    1. 环境变量 VIDEOCLEAN_BACKEND_DIR（推荐）
-    2. 默认猜测：../videoClean/backend（同级 github 目录布局）
+    路径解析顺序（第一个命中的生效）：
+    1. 本项目 vsr-service/.env（独立部署，推荐）
+    2. 环境变量 VIDEOCLEAN_BACKEND_DIR 指向目录下的 .env（兼容旧部署）
+    3. 默认猜测 ../videoClean/backend/.env（兼容旧部署）
     """
+    candidates = [Path(__file__).resolve().parent / ".env"]
+
     explicit = os.getenv("VIDEOCLEAN_BACKEND_DIR")
-    candidates = []
     if explicit:
         candidates.append(Path(explicit) / ".env")
 
-    # 默认猜测：vsr-service 位于 video-subtitle-remover/vsr-service/，
-    # 推测 videoClean 在 ../videoClean（同级 github 目录）
-    guessed = Path(__file__).resolve().parent.parent.parent / "videoClean" / "backend" / ".env"
-    candidates.append(guessed)
+    candidates.append(
+        Path(__file__).resolve().parent.parent.parent / "videoClean" / "backend" / ".env"
+    )
 
     for env_path in candidates:
         if env_path.exists():
@@ -37,10 +38,10 @@ def _load_video_clean_env():
             load_dotenv(env_path)
             return
 
-    print(f"[vsr-config] 未找到 videoClean .env，依赖进程环境变量提供 OSS 凭据")
+    print("[vsr-config] 未找到 .env，依赖进程环境变量提供 OSS 凭据")
 
 
-_load_video_clean_env()
+_load_env()
 
 
 # ===== 服务端 =====
@@ -48,17 +49,19 @@ VSR_PORT = int(os.getenv("VSR_PORT", "3001"))
 VSR_HOST = os.getenv("VSR_HOST", "0.0.0.0")
 
 # 工作目录：VSR 下载的输入、输出的中间文件都放这里，处理完立即清理
-# 默认指向 videoClean/backend/videos/vsr-tmp（与 videoClean 共享挂载）
-_default_workspace = (
-    Path(__file__).resolve().parent.parent.parent
-    / "videoClean" / "backend" / "videos" / "vsr-tmp"
-)
+# 默认放在本项目内 vsr-service/workspace（独立部署，不依赖 videoClean）
+_default_workspace = Path(__file__).resolve().parent / "workspace"
 VSR_WORKSPACE = Path(os.getenv("VSR_WORKSPACE", str(_default_workspace)))
 VSR_INPUT_DIR = VSR_WORKSPACE / "input"
 VSR_OUTPUT_DIR = VSR_WORKSPACE / "output"
 
 # 默认 Inpaint 模式（sttn-auto / sttn-det / lama / propainter / opencv）
-VSR_DEFAULT_INPAINT_MODE = os.getenv("VSR_DEFAULT_INPAINT_MODE", "sttn-auto")
+VSR_DEFAULT_INPAINT_MODE = os.getenv("VSR_DEFAULT_INPAINT_MODE", "sttn-det")
+
+# 默认字幕检测模式（PP_OCRv5_MOBILE 快速 / PP_OCRv5_SERVER 精准）
+VSR_DEFAULT_SUBTITLE_DETECT_MODE = os.getenv(
+    "VSR_DEFAULT_SUBTITLE_DETECT_MODE", "PP_OCRv5_SERVER"
+)
 
 # OSS 上传下载重试次数
 OSS_RETRY_TIMES = int(os.getenv("OSS_RETRY_TIMES", "3"))

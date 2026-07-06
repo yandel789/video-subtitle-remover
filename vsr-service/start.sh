@@ -2,9 +2,8 @@
 # vsr-service 启动脚本（开发用）
 # 用法：./vsr-service/start.sh
 #
-# 本服务位于 video-subtitle-remover/vsr-service/
-# 默认从同级 github 目录下的 videoClean/backend/.env 读取 OSS 凭据。
-# 如位置不同，可设置 VIDEOCLEAN_BACKEND_DIR 环境变量。
+# 本服务位于 video-subtitle-remover/vsr-service/，独立部署。
+# OSS 凭据从本目录下的 .env 读取（见 .env.example）。
 
 set -e
 
@@ -14,7 +13,7 @@ VSR_PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 echo "[vsr-service] 启动脚本"
 echo "[vsr-service] 位置：$SCRIPT_DIR"
 echo "[vsr-service] VSR 项目根：$VSR_PROJECT_DIR"
-echo "[vsr-service] 工作目录（默认）：$VSR_PROJECT_DIR/../videoClean/backend/videos/vsr-tmp"
+echo "[vsr-service] 工作目录（默认）：$SCRIPT_DIR/workspace"
 echo ""
 
 # 检查 video-subtitle-remover 项目结构
@@ -97,7 +96,7 @@ if [ ! -d "$MODELS_DIR" ] || [ -z "$(ls -A "$MODELS_DIR" 2>/dev/null)" ]; then
 fi
 
 # 准备工作目录
-WORKSPACE="${VSR_WORKSPACE:-$VSR_PROJECT_DIR/../videoClean/backend/videos/vsr-tmp}"
+WORKSPACE="${VSR_WORKSPACE:-$SCRIPT_DIR/workspace}"
 mkdir -p "$WORKSPACE/input" "$WORKSPACE/output"
 echo "[vsr-service] 工作目录: $WORKSPACE"
 
