@@ -37,6 +37,17 @@ logging.basicConfig(
 log = logging.getLogger("vsr-service")
 
 
+# ===== 屏蔽 /vsr/health 路径的 access 日志 =====
+# FC 3.0 默认每 5s 探活一次，不屏蔽会刷屏把真实日志冲掉
+# 其他路径（/vsr/remove、/vsr/progress）照常记
+class _HealthAccessFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/vsr/health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthAccessFilter())
+
+
 # ===== 启动 / 关闭 =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,6 +77,14 @@ async def _load_model_safely():
         # 这里只验证可导入，真正实例化放在首次任务执行时（避免冷启动卡死）
         log.info("VSR 模型导入成功，等待首个任务...")
         worker.set_subtitle_remover_class(SubtitleRemover)
+        # 探测推理设备（cuda:0 / cpu），写进 /vsr/health 响应
+        try:
+            import torch
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "unknown"
+        worker.set_device_name(device)
+        log.info(f"推理设备: {device}")
         worker.set_model_ready(True)
     except Exception as e:
         log.error(f"VSR 模型加载失败: {e}")

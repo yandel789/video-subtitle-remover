@@ -45,7 +45,7 @@ _load_env()
 
 
 # ===== 服务端 =====
-VSR_PORT = int(os.getenv("VSR_PORT", "3001"))
+VSR_PORT = int(os.getenv("VSR_PORT", "8000"))  # EAS Processor 默认端口（本地开发可 export VSR_PORT=3001 覆盖）
 VSR_HOST = os.getenv("VSR_HOST", "0.0.0.0")
 
 # 工作目录：VSR 下载的输入、输出的中间文件都放这里，处理完立即清理
@@ -77,6 +77,10 @@ OSS_ACCESS_KEY_SECRET = os.getenv("ACCESSKEY_SECRET", "")
 OSS_REGION = os.getenv("OSS_REGION", "oss-cn-shanghai")
 OSS_BUCKET = os.getenv("OSS_BUCKET", "video-clean")
 OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "https://oss-cn-shanghai.aliyuncs.com")
+OSS_INTERNAL_ENDPOINT = os.getenv(
+    "OSS_INTERNAL_ENDPOINT",
+    "https://oss-cn-shanghai-internal.aliyuncs.com",
+)  # EAS 实例走阿里云内网访问 OSS，流量免费
 
 OSS_RESULT_KEY_PREFIX = os.getenv("OSS_RESULT_KEY_PREFIX", "ai-output/")
 

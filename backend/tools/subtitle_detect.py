@@ -4,7 +4,6 @@ from functools import cached_property
 import cv2
 from tqdm import tqdm
 
-from .model_config import ModelConfig
 from .hardware_accelerator import HardwareAccelerator
 from .common_tools import get_readable_path
 from .ocr import get_coordinates
@@ -12,6 +11,65 @@ from backend.config import config, tr
 from backend.scenedetect import scene_detect
 from backend.scenedetect.detectors import ContentDetector
 from backend.tools.inpaint_tools import is_frame_number_in_ab_sections
+
+
+def _create_easyocr_detector():
+    """1.66 改：从 PaddleOCR 切到 EasyOCR, 彻底绕开 PaddlePaddle 的 cuDNN 8.x 加载问题
+
+    背景: PaddleOCR 依赖 PaddlePaddle, 后者需要 cuDNN 8.x, FC 上 cuDNN 加载链一直 fail
+          (libpaddle.so 内部 dlopen 返回 NULL, 1.58~1.65 多种方案都没修好)
+    EasyOCR 用 PyTorch, 跟 STTN 模型一致, 不需要 PaddlePaddle, 没有 cuDNN 8.x 依赖
+
+    EasyOCR API:
+      reader.readtext(img) -> [(bbox, text, conf), ...]
+      bbox: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]] (4 corners of detection box)
+      text: 识别出的文字
+      conf: 置信度 0-1
+    """
+    import easyocr
+    # 中文简体 + 英文, gpu=True 在 FC 上用 CUDA
+    # 模型路径: 优先 EASYOCR_MODEL_DIR env var, fallback 到 /app/backend/models/easyocr (FC), 再 fallback ~/.EasyOCR/model/ (本地)
+    import os
+    _model_dir = os.environ.get("EASYOCR_MODEL_DIR") or (
+        "/app/backend/models/easyocr" if os.path.isdir("/app") else os.path.expanduser("~/.EasyOCR/model")
+    )
+    os.makedirs(_model_dir, exist_ok=True)
+    # 1.66 改: 包一层 _EasyOCRAdapter, 统一 .predict(img) 接口, 把 EasyOCR 的 [(bbox, text, conf), ...]
+    # 转成 PaddleOCR 2.x 格式 [{'dt_polys': [bbox]}, ...]
+    # 1.67 改: download_enabled=False —— 模型已在镜像 Dockerfile 预置到 _model_dir，
+    #   不再运行时从 github 下载 (FC 冷启动时下载慢/不稳，且每次冷启都重下)
+    return _EasyOCRAdapter(easyocr.Reader(
+        ['ch_sim', 'en'], gpu=True,
+        model_storage_directory=_model_dir,
+        download_enabled=False,
+    ))
+
+
+class _EasyOCRAdapter:
+    """1.66 改：包装 EasyOCR 输出, 转成 PaddleOCR 2.x 格式 [{'dt_polys': [bbox]}, ...]
+    让 detect_subtitle() 的现有逻辑可以继续工作 (isinstance(res, dict) 兼容)
+    dt_polys 用 numpy array 包装, 兼容 .tolist() 调用
+    """
+    def __init__(self, reader):
+        self.reader = reader
+
+    def predict(self, img):
+        # 1.67 改：用 reader.detect() 只做文本框检测，跳过 readtext() 的文字识别(CRNN)阶段。
+        # detect_subtitle 只用 dt_polys(框位置)，不需要识别出的文字，省掉识别可大幅提速
+        # (readtext = detect + recognize；recognize 对每个检测框跑 CRNN，是主要耗时来源)。
+        # detect 返回 (horizontal_list_agg, free_list_agg)，各是 [每张图的框列表]，单图取 [0]：
+        #   horizontal box = [x_min, x_max, y_min, y_max]；free box = 4 点多边形 [[x,y],...]
+        # 统一转成 PaddleOCR 2.x 的 [{'dt_polys': np.array((1,4,2))}, ...] 格式
+        import numpy as np
+        horizontal_list, free_list = self.reader.detect(img)
+        results = []
+        for x_min, x_max, y_min, y_max in horizontal_list[0]:
+            poly = [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]]
+            results.append({'dt_polys': np.array([poly], dtype=np.float32)})
+        for box in free_list[0]:
+            results.append({'dt_polys': np.array([box], dtype=np.float32)})
+        return results
+
 
 class SubtitleDetect:
     """
@@ -44,18 +102,11 @@ class SubtitleDetect:
 
     @cached_property
     def text_detector(self):
-        import paddle
-        paddle.disable_signal_handler()
-        from paddleocr import TextDetection
+        # 1.66 改：去掉 import paddle (不再用 PaddlePaddle)
+        from backend.tools.subtitle_detect import _create_easyocr_detector
         hardware_accelerator = HardwareAccelerator.instance()
-        onnx_providers = hardware_accelerator.onnx_providers
-        model_config = ModelConfig()
-        return TextDetection(
-            model_name=model_config.DET_MODEL_NAME,
-            model_dir=model_config.DET_MODEL_DIR,
-            device="cpu",
-            enable_hpi=False,
-        )
+        hardware_accelerator.onnx_providers  # 保持原引用（兼容 GPU 配置）
+        return _create_easyocr_detector()
 
     def detect_subtitle(self, img):
         temp_list = []
@@ -63,8 +114,12 @@ class SubtitleDetect:
         sub_areas = self.sub_areas
         has_areas = sub_areas is not None and len(sub_areas) > 0
         for res in results:
-            dt_polys = res['dt_polys']
-            if dt_polys is None or len(dt_polys) == 0:
+            # 1.55 改：兼容 dict（paddleocr 2.x）和 OCRResult 对象（paddleocr 3.x）
+            if isinstance(res, dict):
+                dt_polys = res.get('dt_polys')
+            else:
+                dt_polys = getattr(res, 'dt_polys', None)
+            if dt_polys is None or (hasattr(dt_polys, '__len__') and len(dt_polys) == 0):
                 continue
             coordinate_list = get_coordinates(dt_polys.tolist())
             if not coordinate_list:
@@ -101,7 +156,8 @@ class SubtitleDetect:
                 break
             # 读取视频帧成功
             current_frame_no += 1
-            if not is_frame_number_in_ab_sections(current_frame_no - 1, sub_remover.ab_sections):
+            _ab_sections = sub_remover.ab_sections if sub_remover else None
+            if not is_frame_number_in_ab_sections(current_frame_no - 1, _ab_sections):
                 tbar.update(1)
                 continue
             # 仅对采样帧执行 OCR 推理

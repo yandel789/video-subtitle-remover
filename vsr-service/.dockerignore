@@ -1,0 +1,7 @@
+# 不进 FC 镜像的文件
+test_local_startup.py
+__pycache__
+*.pyc
+.env
+.env.*
+workspace/

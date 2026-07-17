@@ -4,7 +4,12 @@ import ctypes
 
 import cv2
 import numpy as np
-from fsplit.filesplit import Filesplit
+try:
+    from fsplit.filesplit import Filesplit
+    HAS_FSPLIT = True
+except ImportError:
+    Filesplit = None
+    HAS_FSPLIT = False  # 大文件分片工具不可用，仅影响超大文件（> 几GB）处理
 
 video_extensions = {
     '.mp4', '.m4a', '.m4v', '.f4v', '.f4a', '.m4b', '.m4r', '.f4b', '.mov',
@@ -39,10 +44,32 @@ def is_video_or_image(filename):
 
 def merge_big_file_if_not_exists(dir, file, man_filename = None):
     if file not in os.listdir(dir):
-        fs = Filesplit()
-        if man_filename is not None:
-            fs.man_filename = man_filename
-        fs.merge(input_dir=dir)
+        if not HAS_FSPLIT:
+            # 修改原因：FC 部署时 fsplit 未装，且 OSS download_models 只下分片
+            # 不下合并后单文件（bit-lama.pt / ProPainter.pth）。
+            # 原行为直接 raise 会导致 ModelConfig.__init__ 中断，FC 任务全部失败。
+            # 改为：警告 + 直接返回，不影响 sttn-det 等不依赖大文件的模式。
+            # 真用到 big-lama / propainter 的模式（lama / propainter inpaint）会另外报错。
+            print(
+                f"[common_tools] WARNING: 跳过 {dir}/{file} 合并（fsplit 未装 + 文件不存在），"
+                f"该模式如需大模型会另外报错。",
+                flush=True,
+            )
+            return
+        # FC 上分片文件存在但 .pt 合并文件没下：调用 fs.merge 也会 raise FileNotFoundError
+        # （找不到 fs_manifest.csv）。这里 catch 兜住，仅警告不中断 init。
+        try:
+            fs = Filesplit()
+            if man_filename is not None:
+                fs.man_filename = man_filename
+            fs.merge(input_dir=dir)
+        except Exception as e:
+            print(
+                f"[common_tools] WARNING: 跳过 {dir}/{file} 合并（fsplit.merge 失败: {e}），"
+                f"该模式如需大模型会另外报错。",
+                flush=True,
+            )
+            return
 
 def get_readable_path(path):
     if sys.platform != 'win32':

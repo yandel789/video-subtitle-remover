@@ -401,7 +401,13 @@ class SubtitleRemover:
                 pass #ignore
 
     def log_model(self):
-        model_friendly_name = list(tr['InpaintMode'].values())[list(InpaintMode).index(config.inpaintMode.value)]
+        # 原代码：list(tr['InpaintMode'].values())[list(InpaintMode).index(config.inpaintMode.value)]
+        # 云端 tr['InpaintMode'] 是 _SafeTrSection 空 dict → list index out of range
+        # 这个变量只用于 GUI 多语言显示，云端不用 GUI，直接用 enum 的 value 字符串（如 "sttn-det"）
+        try:
+            model_friendly_name = list(tr['InpaintMode'].values())[list(InpaintMode).index(config.inpaintMode.value)]
+        except (KeyError, IndexError, TypeError):
+            model_friendly_name = config.inpaintMode.value.value
         model_device = 'CPU'
         if config.inpaintMode.value != InpaintMode.OPENCV and self.hardware_accelerator.has_accelerator():
             accelerator_name = self.hardware_accelerator.accelerator_name
@@ -412,7 +418,12 @@ class SubtitleRemover:
         self.append_output(tr['Main']['SubtitleRemoverModel'].format(f"{model_friendly_name} ({model_device})"))
         providers = ", ".join(self.hardware_accelerator.onnx_providers)
         providers_str = f" ({providers})" if providers else ""
-        detect_mode_name = list(tr['SubtitleDetectMode'].values())[list(SubtitleDetectMode).index(config.subtitleDetectMode.value)]
+        # 1.49 改：和 line 404 InpaintMode 同模式，tr['SubtitleDetectMode'] 在云端是空 dict → IndexError
+        # 云端用 enum 的 value 字符串兜底
+        try:
+            detect_mode_name = list(tr['SubtitleDetectMode'].values())[list(SubtitleDetectMode).index(config.subtitleDetectMode.value)]
+        except (KeyError, IndexError, TypeError):
+            detect_mode_name = config.subtitleDetectMode.value.value
         self.append_output(tr['Main']['SubtitleDetectionModel'].format(f"{detect_mode_name}{providers_str}"))
 
     def merge_audio_to_video(self):

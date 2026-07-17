@@ -1,0 +1,123 @@
+# =============================================================================
+# Dockerfile.fc - vsr-service FC 3.0 优化版（基于通义容器架构师规范）
+# =============================================================================
+# 核心规范（严格遵守阿里云 FC 3.0 自定义容器镜像要求）：
+#   1. CPU 架构：linux/amd64（构建时通过 --platform=linux/amd64 强制指定）
+#   2. 禁用 provenance：--provenance=false（FC 不识别 SBOM/来源证明元数据）
+#   3. 镜像体积：合并 RUN、清理包管理器缓存、清理 site-packages 冗余文件
+#   4. HTTP 服务：8000 端口常驻 uvicorn（FC 健康检查依赖）
+#   5. 路径：Python venv 在 /opt/venv，应用代码在 /app
+#
+# 关键修复（相比 v4）：
+#   - 多阶段构建：builder 装编译工具 → runtime 只保留清理后 venv（省 ~500MB）
+#   - wheels/ 离线装大依赖（torch/paddlepaddle/nvidia/cv2）→ 联网补 wheels 缺的
+#     小包（oss2/matplotlib/einops/setuptools）
+#   - 显式 COPY backend/tools/ + sttn_auto_inpaint.py（防 .dockerignore 改动）
+#   - 启动 wrapper.py（注入 fake qfluentwidgets → 下模型 → 起 uvicorn）
+#
+# 构建命令见同级 docker-build-fc.sh
+# =============================================================================
+
+# ===== Stage 1: builder（装 deps + 编译工具） =====
+FROM --platform=linux/amd64 python:3.10-slim-bookworm AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+# Layer 1: 换源 + 装构建期系统依赖 + 创建 venv + 装 pip/setuptools/wheel
+# （合并为 1 个 RUN 减少 layer）
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        python3-venv \
+        libgl1 libglib2.0-0 ffmpeg \
+        gcc g++ libffi-dev libssl-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+        -i https://mirrors.aliyun.com/pypi/simple/ \
+        --retries 10 --default-timeout=300
+
+# Layer 2: 复制 wheels 和 requirements（单独 COPY 利用 Docker 缓存）
+WORKDIR /build
+COPY wheels/ /wheels/
+COPY vsr-service/requirements.txt /build/requirements.txt
+
+# Layer 3a: 已废 (1.66 改: wheels/ 里已包含 nvidia-cudnn-cu12 9.1.0.70, Mac 上 pre-download 走 Tsinghua)
+# 1.66 改: aliyun 镜像下大文件经常断, 改用 Tsinghua (60MB/s) 预下 + --no-index 离线装
+
+# Layer 3b: 优先用 wheels/ 装大依赖, 缺的小包走 Tsinghua 兜底
+# 1.66 改: wheels/ 已包含 torch/torchvision/nvidia-cudnn/easyocr/opencv-python-headless 等大文件
+# oss2/python-dotenv/opencv-python 等小包不在 wheels/, 走 Tsinghua 兜底
+RUN /opt/venv/bin/pip install --no-cache-dir \
+        --find-links /wheels/ --prefer-binary \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple/ \
+        --retries 10 --default-timeout=300 \
+        -r /build/requirements.txt && \
+    /opt/venv/bin/pip install --no-cache-dir \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple/ \
+        --retries 10 --default-timeout=300 \
+        setuptools oss2 matplotlib einops && \
+    rm -rf /wheels /build /root/.cache /tmp/*
+
+# Layer 4: 激进清理 site-packages（删 tests/docs/__pycache__/.a/.lib/.h）
+# paddle/torch 运行时只用 .so，不依赖静态库
+RUN find /opt/venv -type d \( -name "tests" -o -name "test" -o -name "docs" -o -name "doc" -o -name "__pycache__" \) -exec rm -rf {} + 2>/dev/null || true; \
+    find /opt/venv \( -name "*.pyc" -o -name "*.a" -o -name "*.lib" -o -name "*.h" \) -delete; \
+    find /opt/venv -name "*.egg-info" -type d -exec rm -rf {} + 2>/dev/null || true; \
+    rm -rf /root/.cache /tmp/* /var/tmp/*
+
+# ===== Stage 2: runtime（最终镜像，只保留运行所需） =====
+FROM --platform=linux/amd64 python:3.10-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    VSR_PORT=8000 \
+    VSR_HOST=0.0.0.0 \
+    VSR_PROJECT_DIR=/app
+
+# Layer 5: 换源 + 装运行时系统依赖（最小化）
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Layer 6: 从 builder 复制清理后的 venv（一次性 COPY 整个目录）
+COPY --from=builder /opt/venv /opt/venv
+
+# Layer 7: 复制应用代码
+WORKDIR /app
+COPY backend/ /app/backend/
+
+# Layer 8: 显式复制 tools/ 和 inpaint/sttn_auto_inpaint.py（防 .dockerignore 改动）
+COPY backend/tools/ /app/backend/tools/
+COPY backend/inpaint/sttn_auto_inpaint.py /app/backend/inpaint/sttn_auto_inpaint.py
+
+# Layer 9: 复制 vsr-service（wrapper/server/worker/config/download_models）
+COPY vsr-service/ /app/vsr-service/
+
+# Layer 10: 最终清理（删模型缓存、test、.git、workspace 临时目录）
+# 1.66 改: 去掉 pip install paddleocr (改用 easyocr, 已在 requirements.txt 装好, 第一次运行自动下模型)
+RUN find /app -name "*.pyc" -delete && \
+    find /app -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    rm -rf /app/backend/models /app/backend/test /app/backend/.git \
+           /app/backend/ffmpeg /app/vsr-service/.venv /app/vsr-service/workspace \
+           /app/vsr-service/.env /root/.cache && \
+    mkdir -p /app/backend/models/easyocr && \
+    chmod +x /app/vsr-service/wrapper.py /app/vsr-service/download_models.py
+
+# Layer 10b: 1.67 改 预置 EasyOCR 模型进镜像（craft 检测 + zh_sim_g2 识别）
+# 背景: 1.66 运行时从 github 下载模型，FC 冷启动慢/不稳，且每次冷启都重下。
+#   预置后配合 subtitle_detect.py 的 download_enabled=False，彻底不联网。
+# 必须在 Layer 10 (rm -rf /app/backend/models) 之后 COPY，否则会被删掉。
+COPY easyocr-models/ /app/backend/models/easyocr/
+
+# FC 3.0 必须：8000 端口常驻 HTTP server（uvicorn）
+EXPOSE 8000
+
+# 启动命令：注入 fake qfluentwidgets → 下模型（OSS 602MB + easyocr 首次自动下） → 起 uvicorn
+# wrapper.py 必须在当前进程跑 uvicorn（不能用 subprocess，否则 fake 模块失效）
+CMD ["/opt/venv/bin/python", "/app/vsr-service/wrapper.py"]

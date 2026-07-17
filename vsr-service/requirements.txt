@@ -1,3 +1,7 @@
+# vsr-service 依赖（PAI-EAS 合并版）
+# 原始 vsr-service wrapper 依赖 + VSR 核心依赖（PyTorch、PaddlePaddle 等）
+
+# ====== vsr-service wrapper ======
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 httpx>=0.27.0
@@ -5,8 +9,24 @@ oss2>=2.18.0
 python-dotenv>=1.0.0
 pydantic>=2.5.0
 
-# video-subtitle-remover 依赖（精简版，按需放开）
-# 完整依赖见 /Users/loganyan/github/video-subtitle-remover/requirements.txt
-# 在 vsr-service/ 启动前，请先把 video-subtitle-remover 加入 Python path
-# 安装：pip install -r /Users/loganyan/github/video-subtitle-remover/requirements.txt
-# 同时安装 paddlepaddle + torch（按硬件选 CUDA / CPU / DirectML，详见 VSR README）
+# ====== VSR 核心依赖 ======
+# 深度学习框架（按 T4 GPU 选 CUDA 11.8 版本）
+torch>=2.0.0,<2.5  # PAI 实例 CUDA 11.8 driver，torch 2.5+ 要 CUDA 12
+torchvision>=0.15.0,<0.20
+# 1.66 改：去掉 paddlepaddle-gpu + paddleocr (cuDNN 8.x 加载链 1.58~1.65 修不好)
+#        改用 easyocr (PyTorch-based) 做字幕检测, 跟 STTN 模型一致
+easyocr>=1.7.1  # 字幕检测, 替代 PaddleOCR
+
+# 图像/视频处理
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+av>=10.0.0
+scipy>=1.10.0
+
+# 工具库
+tqdm>=4.65.0
+scenedetect>=0.6.2
+# fsplit>=0.2.0  # 大文件分片工具，videoClean 链路视频 < 300MB 不需要；且 fsplit 包安装有 bug

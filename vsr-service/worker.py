@@ -53,6 +53,12 @@ def set_model_ready(ready: bool, error: Optional[str] = None):
     _load_error = error
 
 
+def set_load_error(error: str):
+    """设置模型加载错误信息（供 server.py 在 except 分支调用）"""
+    global _load_error
+    _load_error = error
+
+
 def is_model_ready() -> bool:
     return _model_ready
 
@@ -63,6 +69,12 @@ def get_load_error() -> Optional[str]:
 
 def get_device_name() -> str:
     return _device_name
+
+
+def set_device_name(name: str):
+    """设置推理设备名（cuda:0 / cpu），供 /vsr/health 返回"""
+    global _device_name
+    _device_name = name
 
 
 def get_task(task_id: str) -> Optional[dict]:
@@ -289,7 +301,9 @@ def _upload_oss_with_retry(local_path, oss_key: str, max_retries: int = None) ->
     auth = oss2.Auth(config.OSS_ACCESS_KEY_ID, config.OSS_ACCESS_KEY_SECRET)
     # 禁用系统代理（Mac 上 oss2 默认会读系统代理 127.0.0.1:7897，导致 OSS 上传走代理失败）
     # 注意：proxies={} 在 oss2 中不生效，必须显式传 'http':'' 'https':''
-    bucket = oss2.Bucket(auth, config.OSS_ENDPOINT, config.OSS_BUCKET, proxies={'http': '', 'https': ''})
+    # 生产（EAS）走 OSS_INTERNAL_ENDPOINT 内网，本地开发 fallback 到 OSS_ENDPOINT 公网
+    endpoint = config.OSS_INTERNAL_ENDPOINT or config.OSS_ENDPOINT
+    bucket = oss2.Bucket(auth, endpoint, config.OSS_BUCKET, proxies={'http': '', 'https': ''})
 
     last_err = None
     for attempt in range(1, max_retries + 1):
