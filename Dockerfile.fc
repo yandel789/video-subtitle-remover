@@ -115,6 +115,14 @@ RUN find /app -name "*.pyc" -delete && \
 # 必须在 Layer 10 (rm -rf /app/backend/models) 之后 COPY，否则会被删掉。
 COPY easyocr-models/ /app/backend/models/easyocr/
 
+# Layer 10c: 1.70 改 预置 VSR 全部 23 个模型文件（V5 + big-lama + propainter + sttn-auto/det）
+# 背景: 冷启动需要从 OSS 下载 ~602MB 模型，约 30s。预置后冷启动省 30s，约 -28% 冷启动 CU。
+# 注意: 只拷分片版本（_1/_2/.../_5），与 OSS 完全对应（让 download_models.py 的 size 跳过生效）。
+#   合并后的 big-lama.pt / ProPainter.pth 不会生成（没装 fsplit），但 sttn-det 模式不依赖这俩，
+#   FC 启动日志会继续打 "跳过 xxx 合并" WARNING，这是预期的。
+# vsr-models/ 在 .gitignore 里排除，build 时从本地 backend/models/ 拷贝（见 docker-build-fc.sh）。
+COPY vsr-models/ /app/backend/models/
+
 # FC 3.0 必须：8000 端口常驻 HTTP server（uvicorn）
 EXPOSE 8000
 

@@ -380,4 +380,5 @@ inference.onnx
 # FC 部署预置资源（大文件，本地保留供 docker build，不进仓库）
 /wheels/
 /easyocr-models/
+/vsr-models/
 /paddleocr-deps/

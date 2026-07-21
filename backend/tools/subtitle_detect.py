@@ -110,9 +110,28 @@ class SubtitleDetect:
 
     def detect_subtitle(self, img):
         temp_list = []
-        results = self.text_detector.predict(img)
         sub_areas = self.sub_areas
         has_areas = sub_areas is not None and len(sub_areas) > 0
+
+        # 1.67 优化：用户已框选单区域时，裁剪到该区域再 OCR，省 90%+ 检测耗时
+        # 裁剪后坐标是相对裁剪图的，需加 offset 还原回原图坐标
+        # 风险：边界字幕若超出用户框选区域会被裁掉——用户已显式框选认为不会发生
+        offset_x = 0
+        offset_y = 0
+        ocr_input = img
+        if has_areas and len(sub_areas) == 1:
+            s_ymin, s_ymax, s_xmin, s_xmax = sub_areas[0]
+            h, w = img.shape[:2]
+            cx_min = max(0, min(int(s_xmin), w))
+            cx_max = max(0, min(int(s_xmax), w))
+            cy_min = max(0, min(int(s_ymin), h))
+            cy_max = max(0, min(int(s_ymax), h))
+            if cy_max > cy_min and cx_max > cx_min:
+                ocr_input = img[cy_min:cy_max, cx_min:cx_max]
+                offset_x = cx_min
+                offset_y = cy_min
+
+        results = self.text_detector.predict(ocr_input)
         for res in results:
             # 1.55 改：兼容 dict（paddleocr 2.x）和 OCRResult 对象（paddleocr 3.x）
             if isinstance(res, dict):
@@ -125,9 +144,21 @@ class SubtitleDetect:
             if not coordinate_list:
                 continue
             if not has_areas:
+                # 全图模式：直接用 OCR 原坐标
                 temp_list.extend(coordinate_list)
+            elif offset_x or offset_y:
+                # 已裁剪到用户区域：加偏移还原原图坐标，再过滤（EasyOCR 边界检测框
+                # 可能轻微超出裁剪边界，需剔除以保持与原过滤逻辑一致）
+                s_ymin, s_ymax, s_xmin, s_xmax = sub_areas[0]
+                for xmin, xmax, ymin, ymax in coordinate_list:
+                    ax_min = xmin + offset_x
+                    ax_max = xmax + offset_x
+                    ay_min = ymin + offset_y
+                    ay_max = ymax + offset_y
+                    if s_xmin <= ax_min and ax_max <= s_xmax and s_ymin <= ay_min and ay_max <= s_ymax:
+                        temp_list.append((ax_min, ax_max, ay_min, ay_max))
             elif len(sub_areas) == 1:
-                # 单区域快速路径（最常见场景）
+                # 兜底：裁剪没生效（区域越界），走原来的单区域过滤逻辑
                 s_ymin, s_ymax, s_xmin, s_xmax = sub_areas[0]
                 for xmin, xmax, ymin, ymax in coordinate_list:
                     if s_xmin <= xmin and xmax <= s_xmax and s_ymin <= ymin and ymax <= s_ymax:

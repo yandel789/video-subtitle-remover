@@ -1,10 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Read(//Users/loganyan/.claude/**)",
-      "Read(//Users/loganyan/**)",
-      "Bash(ls -la .env*)",
-      "Bash(.venv/bin/python:*)"
+      "*",
+      "Skill(update-config)",
+      "Bash(echo \"exit=$?\")"
+    ],
+    "additionalDirectories": [
+      "/Users/yandel789/github"
     ]
   }
 }
